@@ -1,3 +1,5 @@
+// sudo chmod a+rw /dev/ttyACM0
+
 // LIBRARIES //
 #include <Elegoo_GFX.h>
 #include <Elegoo_TFTLCD.h>
@@ -7,10 +9,10 @@
 #include <MsTimer2.h>
 #include <SD.h>
 #include <SPI.h>
+#include "Adafruit_MPR121.h"
 
 // PINS INITIALIZATION //
 const byte temperature_sensor_pin = 49;
-const byte touch_sensor_pin = 19;
 const byte touch_sensor_led_pin = 31;
 const byte light_sensor_pin = 15;
 const byte sd_pin = 53;
@@ -19,7 +21,6 @@ const byte sd_pin = 53;
 float humidity = 0;
 float temperature = 0;
 float light = 0;
-bool touch = false;
 
 // RATS ID //
 String last_rat = "";
@@ -34,6 +35,17 @@ DHT dht(DHTPIN, DHTTYPE);   //Initializa DHT sensor
 String tag = "";         // a String to hold incoming data
 volatile bool stringComplete = false;  // whether the string is complete
 
+// TOUCH SENSOR //
+uint16_t lasttouched = 0;
+uint16_t currtouched = 0;
+unsigned int touch_start = 0;
+unsigned int touch_stop = 0;
+unsigned int elapsed_time = 0;
+#ifndef _BV
+#define _BV(bit) (1 << (bit)) 
+#endif
+Adafruit_MPR121 cap = Adafruit_MPR121();
+
 // CLOCK SETUP //
 DS3231 Clock;
 byte Year = 22;
@@ -46,7 +58,6 @@ bool Century  = false;
 bool h12 ;
 bool PM ;
 unsigned int screen_timer = 0;
-
 
 // LCD SCREEN SETUP //
 #define update_screen_time 1000
@@ -197,7 +208,27 @@ void serialEvent2() {
       stringComplete = true;
     }
   }
+  
+}
 
+void TouchSensor() {
+
+  currtouched = cap.touched();
+  
+  for (uint8_t i=0; i<12; i++) {
+    if ((currtouched & _BV(i)) && !(lasttouched & _BV(i)) ) {
+      digitalWrite(touch_sensor_led_pin, HIGH);
+      touch_start = millis();
+    }
+    // if it *was* touched and now *isnt*, alert!
+    if (!(currtouched & _BV(i)) && (lasttouched & _BV(i)) ) {
+      digitalWrite(touch_sensor_led_pin, LOW);
+      touch_stop = millis();
+    }
+  }
+
+  elapsed_time = touch_stop - touch_start;
+  lasttouched = currtouched;
 }
 
 void SaveData() {
@@ -214,8 +245,8 @@ void SaveData() {
       dataString += ",";
       dataString += String(light);
       dataString += ",";
-      //dataString += String(relojON);
-      //dataString += ",";
+      dataString += String(elapsed_time);
+      dataString += ",";
       dataString += String(Date);
       dataString += ",";
       dataString += String(Month);
@@ -257,7 +288,7 @@ void setup() {
   uint16_t identifier = 0x9341;
   tft.begin(identifier);
   Serial.println("LCD ...  Success.");
-  tft.setRotation(1);
+  tft.setRotation(3);
   tft.fillScreen(BLACK);
   tft.setTextColor(GREEN);
 
@@ -269,7 +300,7 @@ void setup() {
   // SD initialization
   if (!SD.begin(PIN_SD_CS)) {
     Serial.println("SD ... Failure.");
-    // while (1); // VERIFY
+    // while (1);
   }else
   Serial.println("SD ... Success.");
   tag.reserve(11);
@@ -282,20 +313,24 @@ void setup() {
   // RFID initialization
   if (!Serial2) {
     Serial.println("RFID ... Failure.");
+    // while (1);
   }else
   Serial.println("RFID ... Success."); 
   
   // Touch sensor initialization
   pinMode(touch_sensor_led_pin, OUTPUT);
-  pinMode(touch_sensor_pin, INPUT_PULLUP);
-  digitalWrite(touch_sensor_led_pin, touch);
-  //attachInterrupt(digitalPinToInterrupt(touch_sensor_pin), TouchSensorActivated, CHANGE);
-
+  digitalWrite(touch_sensor_led_pin, LOW);
+  if (!cap.begin(0x5A)) {
+    Serial.println("MPR121 ... Failure.");
+    // while (1);
+  }
+  Serial.println("MPR121 ... Success.");
 }
 
 void loop() {
   ReadSensors();
   GetClock();
+  TouchSensor();
 
   if(screen_timer>update_screen_time){
     UpdateScreen();

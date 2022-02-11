@@ -1,5 +1,6 @@
-#include <Elegoo_GFX.h>    // Core graphics library
-#include <Elegoo_TFTLCD.h> // Hardware-specific library
+// LIBRARIES //
+#include <Elegoo_GFX.h>
+#include <Elegoo_TFTLCD.h>
 #include "DHT.h"
 #include <DS3231.h>
 #include <Wire.h>
@@ -7,17 +8,43 @@
 #include <SD.h>
 #include <SPI.h>
 
+// PINS INITIALIZATION //
+const byte temperature_sensor_pin = 49;
+const byte touch_sensor_pin = 19;
+const byte touch_sensor_led_pin = 31;
+const byte light_sensor_pin = 15;
+const byte sd_pin = 53;
 
-//Configuración del sensor de temperatura
-#define DHTPIN 49        // Digital pin connected to the DHT sensor
-#define DHTTYPE DHT22    // Modelo del sensor de temperatura y humedad DHT 22 
-DHT dht(DHTPIN, DHTTYPE);
-float h = 0;             // variable para almacenar la humedad
-float t = 0;             // Variable para almacenar la temperatura
-float luz=0;
+// MEASURED VARIABLES //
+float humidity = 0;
+float temperature = 0;
+float light = 0;
 
+// RATS ID //
+String last_rat = "";
+String current_rat = "";
 
-//Configuracion del reloj
+// TEMPERATURE SENSOR SETUP//
+#define DHTPIN temperature_sensor_pin   // Digital pin connected to the DHT sensor
+#define DHTTYPE DHT22   // Temperature and humidity sensor model DHT 22 
+DHT dht(DHTPIN, DHTTYPE);   //Initializa DHT sensor
+
+// RFID SENSOR //
+String tag = "";         // a String to hold incoming data
+volatile bool stringComplete = false;  // whether the string is complete
+
+// TOUCH SENSOR SETUP //
+volatile byte touch = LOW;         // Estado inicial "No hay toque"
+unsigned int relojON=0;             // Variables para medir los tiempos Altos y Bajos de la Señal de toque en milisegundos
+unsigned int relojOFF=0;
+bool Valid_OFF=false;               //Variables bandera para validar o no PULSOS validos
+bool Valid_ON=false;
+int TON_min=10;                    // Tiempos minimos en milisegundos para determinar un pulso valido
+int TOFF_min=5;
+unsigned int TON=0;                 //Variable de tiempo total de encendido y apagado
+unsigned int TOFF=0;
+
+// CLOCK SETUP //
 DS3231 Clock;
 bool Century=false;
 bool h12;
@@ -34,53 +61,17 @@ byte Hour=15;
 byte Minute=19;
 byte Second=00;
 
-//Variables para RFID
-String inputString = "";         // a String to hold incoming data
-String RataActual= "";
-String RataPasada= "";
-volatile bool stringComplete = false;  // whether the string is complete
-
-//Variables para el toque por cero
-const byte interruptPin = 19;       // Pin para recibir el detector de toque
-const byte ledPin = 31;             //Solo es para verificar si se está tocando o no el sensor (se debe activar el LED al toque)
-volatile byte touch = LOW;         // Estado inicial "No hay toque"
-unsigned int relojON=0;             // Variables para medir los tiempos Altos y Bajos de la Señal de toque en milisegundos
-unsigned int relojOFF=0;
-bool Valid_OFF=false;               //Variables bandera para validar o no PULSOS validos
-bool Valid_ON=false;
-int TON_min=10;                    // Tiempos minimos en milisegundos para determinar un pulso valido
-int TOFF_min=5;
-unsigned int TON=0;                 //Variable de tiempo total de encendido y apagado
-unsigned int TOFF=0;
-
- 
-
-//Pantalla
-// The control pins for the LCD can be assigned to any digital or
-// analog pins...but we'll use the analog pins as this allows us to
-// double up the pins with the touch screen (see the TFT paint example).
-#define LCD_CS A3 // Chip Select goes to Analog 3
-#define LCD_CD A2 // Command/Data goes to Analog 2
-#define LCD_WR A1 // LCD Write goes to Analog 1
-#define LCD_RD A0 // LCD Read goes to Analog 0
-#define PIN_SD_CS 53// Elegoo SD shields and modules: pin 53 on MEGA
-
-#define LCD_RESET A4 // Can alternately just connect to Arduino's reset pin
-unsigned int RelojPantalla=0; //contador en milisegundos para imprimir la informacion
-#define NumeroMilis 1000
+unsigned int screen_clock = 0; //contador en milisegundos para imprimir la informacion
+#define update_screen_time 1000
 bool primeravez=true;
-// When using the BREAKOUT BOARD only, use these 8 data lines to the LCD:
 
-//   D0 connects to digital pin 8  (Notice these are
-//   D1 connects to digital pin 9   NOT in order!)
-//   D2 connects to digital pin 2
-//   D3 connects to digital pin 3
-//   D4 connects to digital pin 4
-//   D5 connects to digital pin 5
-//   D6 connects to digital pin 6
-//   D7 connects to digital pin 7
+// LCD SCREEN SETUP //
+#define LCD_CS A3
+#define LCD_CD A2 
+#define LCD_WR A1
+#define LCD_RD A0
+#define LCD_RESET A4
 
-// Assign human-readable names to some common 16-bit color values:
 #define BLACK   0x0000
 #define BLUE    0x001F
 #define RED     0xF800
@@ -91,11 +82,9 @@ bool primeravez=true;
 #define WHITE   0xFFFF
 
 Elegoo_TFTLCD tft(LCD_CS, LCD_CD, LCD_WR, LCD_RD, LCD_RESET);
-// If using the shield, all control and data lines are fixed, and
-// a simpler declaration can optionally be used:
-// Elegoo_TFTLCD tft;
 
-//Variables SD
+// SD CARD SETUP //
+#define PIN_SD_CS sd_pin
 File dataFile;
 String dataString;
 int cuentaImpresiones=0;
@@ -126,6 +115,8 @@ File bmpFile;
 #define BUFFPIXEL       60                      // must be a divisor of 240 
 #define BUFFPIXEL_X3    180                     // BUFFPIXELx3
 
+
+// LCD SCREEN ADITIONAL SETUP //
 void bmpdraw(File f, int x, int y)
 {
     bmpFile.seek(__Gnbmp_image_offset);
@@ -213,7 +204,7 @@ boolean bmpReadHeader(File f)
     return true;
 }
 
-/*********************************************/
+// SD CARD SETUP
 // These read data from the SD card file and convert them to big endian
 // (the data is stored in little endian format!)
 
@@ -242,45 +233,37 @@ uint32_t read32(File f)
     return d;
 }
 
-
-
-
-
-void LeeSensores(){
+void ReadSensors() {
  
- // Read humidity
-  h = dht.readHumidity();
-  // Read temperature as Celsius (the default)
-  t = dht.readTemperature();
-
-  luz=analogRead(A15);
+  humidity = dht.readHumidity();
+  temperature = dht.readTemperature();
+  light=analogRead(light_sensor_pin);
   
-  if (isnan(h) || isnan(t) ) {
+  if (isnan(humidity) || isnan(temperature) ) {
   Serial.print('\n');
-  Serial.print("Error de lectura sensor Humedad y Temperatura ");
+  Serial.print("There's a problem with the DHT sensor.");
+
   }  
  }
-//
 
-void LeeReloj() {
+void ReadClock() {
    Hour=Clock.getHour(h12, PM);
    Minute=Clock.getMinute();
    Second =Clock.getSecond();
 }
 
-void LeeCalendario() {
+void ReadCalendar() {
   Date=Clock.getDate(); 
   Month=Clock.getMonth(Century);
   Year=Clock.getYear();
 }
 
-
-void ImprimeStatus() {
+void ShowInScreen() {
   
-    tft.setRotation(1);     
+  // Date and time
+    tft.setRotation(3);     
     tft.fillScreen(BLACK);
     
-  
     tft.setCursor(0,0);
         tft.setTextSize(3);
     if (Hour<10) {  
@@ -295,15 +278,14 @@ void ImprimeStatus() {
           }
         tft.print(Minute, DEC);
         tft.print(":");
-       
-        
+
         if (Second<10) {  
             tft.print("0");
           }
           
         tft.print(Second, DEC);
         tft.setTextSize(2);
-        // Add AM/PM indicator
+
         if (h12) {
           if (PM) {
             tft.println(" PM");
@@ -312,11 +294,8 @@ void ImprimeStatus() {
           }
         }
        
-      
-        
         tft.setCursor(215,0);
-        // Dia
-        
+
         if (Date<10) {
           
             tft.print("0");}
@@ -329,111 +308,78 @@ void ImprimeStatus() {
           }
         tft.print(Month, DEC);
        
-        // Año
         tft.print("/");
         tft.println(Year, DEC);
 
-  
+    // Sensors data
     tft.setCursor(0,50);
     tft.setTextSize(2);
-    tft.print("Temperatura:");
-    tft.print(t);
-    tft.println("C");
-    tft.print("Humedad:");
-    tft.print(h);
+    tft.print("Rat ID:");
+    tft.println(current_rat);
+    tft.print("Temperature:");
+    tft.print(temperature);
+    tft.println(" C");
+    tft.print("Humidity:");
+    tft.print(humidity);
     tft.println("%");
-    tft.print("Iluminacion:");
-    tft.println(luz);
-    tft.print("Rata ID:");
-    tft.println(RataActual);
-   
-    
+    tft.print("Light:");
+    tft.println(light);
+
 }
+
 void setup() {
+
+  // Arduino communication protocols
+  Serial.begin(9600);
+  Serial2.begin(9600);
+  Wire.begin(); // IC2 interface
+
+  // LCD screen initialization
   uint16_t identifier = 0x9341;
-  
-  
   tft.begin(identifier);
+  Serial.println("LCD ...  Success.");
+
   tft.setRotation(3);
   tft.fillScreen(BLACK);
   tft.setTextColor(GREEN);
   tft.setTextSize(3);
   tft.setCursor(0,0);
-  Serial.begin(9600);
-  while (!Serial) {
-   
-  }
-  Serial.println("LCD Ok");
-  ///SD CARD
-  if (!SD.begin(PIN_SD_CS)) { // Inicializa la comunicación con la tarjeta SD con el pin 53 como selector del SPI
-    Serial.println("SD initialization failed, or not present!");
-    while (1); // don't do anything more:
+
+  // SD initialization
+  if (!SD.begin(PIN_SD_CS)) {
+    Serial.println("SD ... Failure.");
+    // while (1); // VERIFY
   }else
-  Serial.println("SD initialization done."); 
-  //
-  
-  // Start the I2C interface
-  Wire.begin();
-    
-  //Inicializa sensor de temperatura y humedad
+  Serial.println("SD ... Success.");
+  tag.reserve(11);
+
+  // DHT sensor initialization
   dht.begin();
-  Serial.println(F("Sensor de Humedad y Temperatura Ok"));
+  Serial.println("DHT ... Success."); 
 
-//Escribe fecha y hora del reloj
-//  Clock.setClockMode(false);  // set to AM/PM
-//  Clock.setYear(Year);
-//  Clock.setMonth(Month);
-//  Clock.setDate(Date);
-//  Clock.setDoW(DoW);
-//  Clock.setHour(Hour);
-//  Clock.setMinute(Minute);
-//  Clock.setSecond(Second);
-
-//ConfiguraLector Tarjetas RFID
-  Serial2.begin(9600);
-  while (!Serial2) {
-   
-  }
-  inputString.reserve(11);
-  pinMode(ledPin, OUTPUT);
-  pinMode(interruptPin, INPUT_PULLUP);
+  // RFID initialization
+  if (!Serial2) {
+    Serial.println("RFID ... Failure.");
+  }else
+  Serial.println("RFID ... Success."); 
+  
+  // Touch sensor LED initialization
+  pinMode(touch_sensor_led_pin, OUTPUT);
+  pinMode(touch_sensor_pin, INPUT_PULLUP);
   
   
-  Serial.println("Lector RFID Ok");
-  MsTimer2::set(1, Temporizador); // Interrupción para inicializar el contador del menu a 1 mili segundo
-  attachInterrupt(digitalPinToInterrupt(interruptPin), Toque, CHANGE);
+  MsTimer2::set(1, Timer); // Interrupción para inicializar el contador del menu a 1 mili segundo
+  attachInterrupt(digitalPinToInterrupt(touch_sensor_pin), TouchSensorActivated, CHANGE);
   MsTimer2::start();
   touch=LOW;
 
-  //Despliega Imagen Primera vez 
-  bmpFile = SD.open(__Gsbmp_files[0]);
-    if (! bmpFile) {
-        Serial.println("didnt find image");
-        tft.setTextColor(WHITE);    tft.setTextSize(2);
-        tft.println("Falta el logo");
-        while (1);
-    }
-
-    if(! bmpReadHeader(bmpFile)) {
-        Serial.println("bad bmp");
-        tft.setTextColor(WHITE);    tft.setTextSize(1);
-        tft.println("bad bmp");
-        return;
-    }
-//    tft.setRotation(2);
-//    bmpdraw(bmpFile, 0, 0);
-//    bmpFile.close();
-//    delay(1000);
-
    dataFile = SD.open("datalog1.txt", FILE_WRITE);
-
-
 
 }
 
-void Toque(){
+void TouchSensorActivated() {
   touch = !touch;
-  digitalWrite(ledPin, touch);
+  digitalWrite(touch_sensor_led_pin, touch);
   if(touch){                  //Si hay "toque" se inicializa las variables de conteo de reloj ON y se invalida el PULSO ON
     relojON=0;
     Valid_ON=false;
@@ -445,8 +391,9 @@ void Toque(){
   }
    
 }
-void Temporizador() {
-RelojPantalla=RelojPantalla+1;
+
+void Timer() {
+screen_clock=screen_clock+1;
       if(touch){
         if(Valid_OFF){
           relojON=relojON+1;  
@@ -471,13 +418,13 @@ RelojPantalla=RelojPantalla+1;
           cuentaImpresiones=cuentaImpresiones+1;
           if(cuentaImpresiones<11){
             dataString = "";
-            dataString += String(t);
+            dataString += String(current_rat);
             dataString += ",";
-            dataString += String(h);
+            dataString += String(humidity);
             dataString += ",";
-            dataString += String(luz);
+            dataString += String(temperature);
             dataString += ",";
-            dataString += String(RataActual);
+            dataString += String(light);
             dataString += ",";
             dataString += String(relojON);
             dataString += ",";
@@ -494,10 +441,10 @@ RelojPantalla=RelojPantalla+1;
             dataString += String(Second);
             if (dataFile) {
                 dataFile.println(dataString);
-                Serial.println("Imprime");
+                Serial.println(dataString);
             }
           else {
-          Serial.println("Error Interrupt");
+            Serial.println("Error Interrupt");
           }
           }
           if(cuentaImpresiones==11){
@@ -508,15 +455,12 @@ RelojPantalla=RelojPantalla+1;
           
           MsTimer2::start(); 
         }
-        
-        
-     
-     
+
       if (stringComplete) {
         MsTimer2::stop();
-        RataPasada=RataActual;
-        RataActual=inputString;
-        inputString = "";
+        last_rat=current_rat;
+        current_rat = tag;
+        tag = "";
         stringComplete = false;
         MsTimer2::start(); 
       }
@@ -524,50 +468,25 @@ RelojPantalla=RelojPantalla+1;
 }
 
 void loop() {
-  LeeSensores();
-  LeeReloj();
-  LeeCalendario();
+  ReadSensors();
+  ReadClock();
+  ReadCalendar();
 
-  if(RelojPantalla>NumeroMilis){
-    ImprimeStatus();
-    RelojPantalla=0;
+  if(screen_clock>update_screen_time){
+    ShowInScreen();
+    screen_clock=0;
   }
-
-  
- 
-
-////Lineas para programar el Lector RFID para el protocolo FDX-B ISO14223
-////  String a;
-////  Serial1.println("SD2");
-////  while(Serial1.available()) {
-////  a= Serial1.readString();// read the incoming data as string
-////  Serial.println(a);
-////  }
-//
-//
-  
   
  }
 
 void serialEvent2() {
   while (Serial2.available()) {
-    // get the new byte:
     volatile char inChar = (char)Serial2.read();
-    // add it to the inputString:
-    inputString += inChar;
-   
-    // if the incoming character is a newline, set a flag so the main loop can
-    // do something about it:
+    tag += inChar;
+
     if ((inChar == 13) && (!stringComplete)) {
-      inputString.trim();
+      tag.trim();
       stringComplete = true;
-      
     }
   }
 }
-
-
-
-
-    
-    
