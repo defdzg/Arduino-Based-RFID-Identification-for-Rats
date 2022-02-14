@@ -14,6 +14,7 @@
 // PINS INITIALIZATION //
 const byte temperature_sensor_pin = 49;
 const byte touch_sensor_led_pin = 31;
+const byte touch_sensor_pin = 19;
 const byte light_sensor_pin = 15;
 const byte sd_pin = 53;
 
@@ -36,15 +37,30 @@ String tag = "";         // a String to hold incoming data
 volatile bool stringComplete = false;  // whether the string is complete
 
 // TOUCH SENSOR //
+volatile byte touch = LOW;         // Estado inicial "No hay toque"
+unsigned int relojON=0;             // Variables para medir los tiempos Altos y Bajos de la Señal de toque en milisegundos
+unsigned int relojOFF=0;
+bool Valid_OFF=false;               //Variables bandera para validar o no PULSOS validos
+bool Valid_ON=false;
+int TON_min=10;                    // Tiempos minimos en milisegundos para determinar un pulso valido
+int TOFF_min=5;
+unsigned int TON=0;                 //Variable de tiempo total de encendido y apagado
+unsigned int TOFF=0;
+
+
+// MPR121
 uint16_t lasttouched = 0;
 uint16_t currtouched = 0;
-unsigned int touch_start = 0;
-unsigned int touch_stop = 0;
-unsigned int elapsed_time = 0;
 #ifndef _BV
 #define _BV(bit) (1 << (bit)) 
 #endif
 Adafruit_MPR121 cap = Adafruit_MPR121();
+
+// Push button
+unsigned long touch_stop = 0;
+unsigned long touch_start = 0;
+unsigned long elapsed_time = 0;
+bool touch_flag = false;
 
 // CLOCK SETUP //
 DS3231 Clock;
@@ -177,24 +193,96 @@ void UpdateScreen() {
 
   // Sensors data
   tft.setCursor(0,50);
-  tft.print("Rat ID:");
+  tft.print("ID Rata:");
   tft.println(current_rat);
-  tft.print("Temperature:");
+  tft.print("Temperatura:");
   tft.print(temperature);
   tft.println(" C");
-  tft.print("Humidity:");
+  tft.print("Humedad:");
   tft.print(humidity);
   tft.println(" %");
-  tft.print("Light:");
+  tft.print("Luz:");
   tft.println(light);
-
+  tft.print("Tiempo contacto: ");
+  tft.print(relojON);
+  tft.println(" ms");
 }
 
 void Timer() {
-
   screen_timer=screen_timer+1;
+      if(touch){
+        if(Valid_OFF){
+          relojON=relojON+1;  
+        }
+        else{
+          relojON=relojON+relojOFF;
+          relojOFF=0;
+          Valid_OFF=true;
+
+        } 
+
+        if ((relojON>TON_min)&&(!Valid_ON)){  //Condiciones para determinar un pulso ON valido
+          Valid_ON=true;
+        }
+      }
+      else{
+        relojOFF=relojOFF+1;   
+        if((relojOFF>TOFF_min)&&(Valid_ON)&&(!Valid_OFF)){ //Se imprime el valor siempre y cuando el pulso de bajada sea valido
+
+          Valid_OFF=true;
+          MsTimer2::stop();
+          cuentaImpresiones=cuentaImpresiones+1;
+          if(cuentaImpresiones<11){
+            dataString = "";
+            dataString += String(current_rat);
+            dataString += ",";
+            dataString += String(humidity);
+            dataString += ",";
+            dataString += String(temperature);
+            dataString += ",";
+            dataString += String(light);
+            dataString += ",";
+            dataString += String(relojON);
+            dataString += ",";
+            dataString += String(Date);
+            dataString += ",";
+            dataString += String(Month);
+            dataString += ",";
+            dataString += String(Year);
+            dataString += ",";
+            dataString += String(Hour);
+            dataString += ",";
+            dataString += String(Minute);
+            dataString += ",";
+            dataString += String(Second);
+            if (dataFile) {
+                dataFile.println(dataString);
+                Serial.println(dataString);
+            }
+          else {
+            Serial.println("Error Interrupt");
+          }
+          }
+          if(cuentaImpresiones==11){
+           dataFile.close();
+           Serial.println("Archivo Cerrado");
+          }
+          }
+
+          MsTimer2::start(); 
+        }
+
+      if (stringComplete) {
+        MsTimer2::stop();
+        last_rat=current_rat;
+        current_rat = tag;
+        tag = "";
+        stringComplete = false;
+        MsTimer2::start(); 
+      }
 
 }
+
 
 // RFID tag reading
 void serialEvent2() {
@@ -208,9 +296,10 @@ void serialEvent2() {
       stringComplete = true;
     }
   }
-  
+  current_rat = tag;
 }
 
+// MPR121 Capacitive Touch Sensor
 void TouchSensor() {
 
   currtouched = cap.touched();
@@ -220,7 +309,6 @@ void TouchSensor() {
       digitalWrite(touch_sensor_led_pin, HIGH);
       touch_start = millis();
     }
-    // if it *was* touched and now *isnt*, alert!
     if (!(currtouched & _BV(i)) && (lasttouched & _BV(i)) ) {
       digitalWrite(touch_sensor_led_pin, LOW);
       touch_stop = millis();
@@ -229,6 +317,22 @@ void TouchSensor() {
 
   elapsed_time = touch_stop - touch_start;
   lasttouched = currtouched;
+}
+
+// Push button as touch sensor
+void TouchSensorActivated() {
+  touch = !touch;
+  digitalWrite(touch_sensor_led_pin, touch);
+  if(touch){                  //Si hay "toque" se inicializa las variables de conteo de reloj ON y se invalida el PULSO ON
+    relojON=0;
+    Valid_ON=false;
+
+  }
+  else{ 
+    relojOFF=0;             //Si no hay "toque" se inicializa las variables de conteo de reloj OFF y se invalida el PULSO OFF
+    Valid_OFF=false;
+  }
+
 }
 
 void SaveData() {
@@ -299,38 +403,48 @@ void setup() {
 
   // SD initialization
   if (!SD.begin(PIN_SD_CS)) {
-    Serial.println("SD ... Failure.");
-    // while (1);
+    tft.println("SD ... Failure.");
+    while (1);
   }else
-  Serial.println("SD ... Success.");
+  tft.println("SD ... Success.");
   tag.reserve(11);
   dataFile = SD.open("datalog1.txt", FILE_WRITE);
-
+  delay(2000);
+  
   // DHT sensor initialization
   dht.begin();
-  Serial.println("DHT ... Success."); 
+  tft.println("DHT ... Success."); 
+  delay(2000);
 
   // RFID initialization
   if (!Serial2) {
-    Serial.println("RFID ... Failure.");
-    // while (1);
+    tft.println("RFID ... Failure.");
+    while (1);
   }else
-  Serial.println("RFID ... Success."); 
-  
+  tft.println("RFID ... Success."); 
+  delay(2000);
+
   // Touch sensor initialization
   pinMode(touch_sensor_led_pin, OUTPUT);
   digitalWrite(touch_sensor_led_pin, LOW);
+  attachInterrupt(digitalPinToInterrupt(touch_sensor_pin), TouchSensorActivated, CHANGE);
+
+  // Adafruit MPR121
   if (!cap.begin(0x5A)) {
     Serial.println("MPR121 ... Failure.");
     // while (1);
   }
-  Serial.println("MPR121 ... Success.");
+  // tft.println("MPR121 ... Success.");
+  delay(2000);
+
 }
 
 void loop() {
+
   ReadSensors();
   GetClock();
-  TouchSensor();
+
+  elapsed_time = touch_start;
 
   if(screen_timer>update_screen_time){
     UpdateScreen();
