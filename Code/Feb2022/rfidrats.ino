@@ -56,12 +56,6 @@ uint16_t currtouched = 0;
 #endif
 Adafruit_MPR121 cap = Adafruit_MPR121();
 
-// Push button
-unsigned long touch_stop = 0;
-unsigned long touch_start = 0;
-unsigned long elapsed_time = 0;
-bool touch_flag = false;
-
 // CLOCK SETUP //
 DS3231 Clock;
 byte Year = 22;
@@ -93,6 +87,126 @@ File dataFile;
 String dataString;
 int cuentaImpresiones=0;
 
+#define MAX_BMP         10                      // bmp file num
+#define FILENAME_LEN    20                      // max file name length
+
+const int __Gnbmp_height = 320;                 // bmp hight
+const int __Gnbmp_width  = 240;                 // bmp width
+
+unsigned char __Gnbmp_image_offset  = 0;        // offset
+
+int __Gnfile_num = 1;                           // num of file
+
+char __Gsbmp_files[5][FILENAME_LEN] =           // add file name here
+{
+"UAEMrot.bmp",
+};
+File bmpFile;
+
+/*********************************************/
+// This procedure reads a bitmap and draws it to the screen
+// its sped up by reading many pixels worth of data at a time
+// instead of just one pixel at a time. increading the buffer takes
+// more RAM but makes the drawing a little faster. 20 pixels' worth
+// is probably a good place
+
+#define BUFFPIXEL       60                      // must be a divisor of 240 
+#define BUFFPIXEL_X3    180                     // BUFFPIXELx3
+
+
+// LCD SCREEN ADITIONAL SETUP //
+void bmpdraw(File f, int x, int y)
+{
+    bmpFile.seek(__Gnbmp_image_offset);
+
+    uint32_t time = millis();
+
+    uint8_t sdbuffer[BUFFPIXEL_X3];                 // 3 * pixels to buffer
+
+    for (int i=0; i< __Gnbmp_height; i++) {
+        for(int j=0; j<(240/BUFFPIXEL); j++) {
+            bmpFile.read(sdbuffer, BUFFPIXEL_X3);
+
+            uint8_t buffidx = 0;
+            int offset_x = j*BUFFPIXEL;
+            unsigned int __color[BUFFPIXEL];
+
+            for(int k=0; k<BUFFPIXEL; k++) {
+                __color[k] = sdbuffer[buffidx+2]>>3;                        // read
+                __color[k] = __color[k]<<6 | (sdbuffer[buffidx+1]>>2);      // green
+                __color[k] = __color[k]<<5 | (sdbuffer[buffidx+0]>>3);      // blue
+
+                buffidx += 3;
+            }
+
+      for (int m = 0; m < BUFFPIXEL; m ++) {
+              tft.drawPixel(m+offset_x, i,__color[m]);
+      }
+        }
+    }
+
+    Serial.print(millis() - time, DEC);
+    Serial.println(" ms");
+}
+
+boolean bmpReadHeader(File f) 
+{
+    // read header
+    uint32_t tmp;
+    uint8_t bmpDepth;
+
+    if (read16(f) != 0x4D42) {
+        // magic bytes missing
+        return false;
+    }
+
+    // read file size
+    tmp = read32(f);
+    Serial.print("size 0x");
+    Serial.println(tmp, HEX);
+
+    // read and ignore creator bytes
+    read32(f);
+
+    __Gnbmp_image_offset = read32(f);
+    Serial.print("offset ");
+    Serial.println(__Gnbmp_image_offset, DEC);
+
+    // read DIB header
+    tmp = read32(f);
+    Serial.print("header size ");
+    Serial.println(tmp, DEC);
+
+    int bmp_width = read32(f);
+    int bmp_height = read32(f);
+
+    if(bmp_width != __Gnbmp_width || bmp_height != __Gnbmp_height)  {    // if image is not 320x240, return false
+        return false;
+    }
+
+    if (read16(f) != 1)
+    return false;
+
+    bmpDepth = read16(f);
+    Serial.print("bitdepth ");
+    Serial.println(bmpDepth, DEC);
+
+    if (read32(f) != 0) {
+        // compression not supported!
+        return false;
+    }
+
+    Serial.print("compression ");
+    Serial.println(tmp, DEC);
+
+    return true;
+}
+
+// SD CARD SETUP
+// These read data from the SD card file and convert them to big endian
+// (the data is stored in little endian format!)
+
+// LITTLE ENDIAN!
 uint16_t read16(File f)
 {
     uint16_t d;
@@ -104,6 +218,7 @@ uint16_t read16(File f)
     return d;
 }
 
+// LITTLE ENDIAN!
 uint32_t read32(File f)
 {
     uint32_t d;
@@ -115,6 +230,7 @@ uint32_t read32(File f)
     d |= b;
     return d;
 }
+
 
 // FUNCTIONS //
 
@@ -209,6 +325,7 @@ void UpdateScreen() {
 }
 
 void Timer() {
+  
   screen_timer=screen_timer+1;
       if(touch){
         if(Valid_OFF){
@@ -218,9 +335,9 @@ void Timer() {
           relojON=relojON+relojOFF;
           relojOFF=0;
           Valid_OFF=true;
-
+          
         } 
-
+        
         if ((relojON>TON_min)&&(!Valid_ON)){  //Condiciones para determinar un pulso ON valido
           Valid_ON=true;
         }
@@ -228,7 +345,7 @@ void Timer() {
       else{
         relojOFF=relojOFF+1;   
         if((relojOFF>TOFF_min)&&(Valid_ON)&&(!Valid_OFF)){ //Se imprime el valor siempre y cuando el pulso de bajada sea valido
-
+          
           Valid_OFF=true;
           MsTimer2::stop();
           cuentaImpresiones=cuentaImpresiones+1;
@@ -268,7 +385,7 @@ void Timer() {
            Serial.println("Archivo Cerrado");
           }
           }
-
+          
           MsTimer2::start(); 
         }
 
@@ -280,13 +397,12 @@ void Timer() {
         stringComplete = false;
         MsTimer2::start(); 
       }
-
+  
 }
 
 
 // RFID tag reading
 void serialEvent2() {
-
   while (Serial2.available()) {
     volatile char inChar = (char)Serial2.read();
     tag += inChar;
@@ -296,10 +412,9 @@ void serialEvent2() {
       stringComplete = true;
     }
   }
-  current_rat = tag;
 }
 
-// MPR121 Capacitive Touch Sensor
+/* MPR121 Capacitive Touch Sensor
 void TouchSensor() {
 
   currtouched = cap.touched();
@@ -317,7 +432,7 @@ void TouchSensor() {
 
   elapsed_time = touch_stop - touch_start;
   lasttouched = currtouched;
-}
+} */
 
 // Push button as touch sensor
 void TouchSensorActivated() {
@@ -335,52 +450,6 @@ void TouchSensorActivated() {
 
 }
 
-void SaveData() {
-
-    cuentaImpresiones=cuentaImpresiones+1;
-
-    if(cuentaImpresiones<11){
-      dataString = "";
-      dataString += String(current_rat);
-      dataString += ",";
-      dataString += String(humidity);
-      dataString += ",";
-      dataString += String(temperature);
-      dataString += ",";
-      dataString += String(light);
-      dataString += ",";
-      dataString += String(elapsed_time);
-      dataString += ",";
-      dataString += String(Date);
-      dataString += ",";
-      dataString += String(Month);
-      dataString += ",";
-      dataString += String(Year);
-      dataString += ",";
-      dataString += String(Hour);
-      dataString += ",";
-      dataString += String(Minute);
-      dataString += ",";
-      dataString += String(Second);
-      if (dataFile) {
-            dataFile.println(dataString);
-            Serial.println(dataString);
-      }
-    }
-    if(cuentaImpresiones==11){
-      dataFile.close();
-      Serial.println("Archivo Cerrado");
-    }
-
-    if (stringComplete) {
-      MsTimer2::stop();
-      tag = "";
-      stringComplete = false;
-      MsTimer2::start(); 
-    }
-
-}
-
 void setup() {
 
   // Arduino communication protocols
@@ -392,7 +461,7 @@ void setup() {
   uint16_t identifier = 0x9341;
   tft.begin(identifier);
   Serial.println("LCD ...  Success.");
-  tft.setRotation(3);
+  tft.setRotation(1);
   tft.fillScreen(BLACK);
   tft.setTextColor(GREEN);
 
@@ -404,7 +473,7 @@ void setup() {
   // SD initialization
   if (!SD.begin(PIN_SD_CS)) {
     tft.println("SD ... Failure.");
-    while (1);
+    //while (1);
   }else
   tft.println("SD ... Success.");
   tag.reserve(11);
@@ -419,7 +488,7 @@ void setup() {
   // RFID initialization
   if (!Serial2) {
     tft.println("RFID ... Failure.");
-    while (1);
+    //while (1);
   }else
   tft.println("RFID ... Success."); 
   delay(2000);
@@ -443,8 +512,6 @@ void loop() {
 
   ReadSensors();
   GetClock();
-
-  elapsed_time = touch_start;
 
   if(screen_timer>update_screen_time){
     UpdateScreen();
